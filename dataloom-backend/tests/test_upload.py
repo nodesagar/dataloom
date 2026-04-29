@@ -87,6 +87,27 @@ class TestValidateUploadFile:
                 validate_upload_file(file)
             assert "5.0 MB" in exc_info.value.detail
 
+    def test_chunked_streaming_rejects_oversized_file(self):
+        """The chunked streaming path must reject a file exceeding the limit
+        even when the file is larger than a single 64 KB chunk."""
+        max_size = 1024  # 1 KB limit for testing
+        # Content spans multiple 64 KB chunks
+        content = b"x" * (max_size + 1)
+        file = MockUploadFile("data.csv", content=content)
+        with patch("app.utils.security.get_settings") as mock_settings:
+            mock_settings.return_value.allowed_extensions = [".csv"]
+            mock_settings.return_value.max_upload_size_bytes = max_size
+            with pytest.raises(HTTPException) as exc_info:
+                validate_upload_file(file)
+            assert exc_info.value.status_code == 413
+
+    def test_chunked_streaming_cursor_reset_after_validation(self):
+        """After chunked size validation the cursor must be at position 0."""
+        content = b"col1,col2\n" + b"1,2\n" * 20_000  # ~100 KB, multi-chunk
+        file = MockUploadFile("data.csv", content=content)
+        validate_upload_file(file)
+        assert file.file.read() == content
+
 
 class TestFormatSize:
     def test_bytes(self):

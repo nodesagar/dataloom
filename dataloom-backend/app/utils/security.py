@@ -48,8 +48,9 @@ def _format_size(size_bytes: int) -> str:
 def validate_upload_file(file: UploadFile) -> None:
     """Validate an uploaded file's extension and size.
 
-    Checks the file extension against the allowed list and reads the file
-    content to verify it does not exceed the configured maximum size.
+    Checks the file extension against the allowed list and streams the file
+    in 64 KB chunks to verify it does not exceed the configured maximum size.
+    This avoids loading the entire file into memory for the size check.
     After validation the file cursor is reset to the beginning so
     downstream consumers can read it normally.
 
@@ -68,18 +69,19 @@ def validate_upload_file(file: UploadFile) -> None:
             status_code=400, detail=f"File type '{ext}' not allowed. Allowed: {settings.allowed_extensions}"
         )
 
-    # Check file size by reading content
-    contents = file.file.read()
-    size = len(contents)
+    # Check file size via chunked streaming (avoids loading entire file into memory)
+    _CHUNK = 65_536  # 64 KB
+    cumulative = 0
+    while chunk := file.file.read(_CHUNK):
+        cumulative += len(chunk)
+        if cumulative > settings.max_upload_size_bytes:
+            max_human = _format_size(settings.max_upload_size_bytes)
+            actual_human = _format_size(cumulative)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large: {actual_human}. Maximum allowed size is {max_human}.",
+            )
     file.file.seek(0)  # Reset so downstream can read the file
-
-    if size > settings.max_upload_size_bytes:
-        max_human = _format_size(settings.max_upload_size_bytes)
-        actual_human = _format_size(size)
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large: {actual_human}. Maximum allowed size is {max_human}.",
-        )
 
 
 def resolve_upload_path(filename: str) -> Path:
